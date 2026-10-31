@@ -335,4 +335,10 @@ def extract_jia2023_fig14(document: pymupdf.Document, page: pymupdf.Page, captio
 
     data_frame = pd.DataFrame(rows, columns=["series", "x", "y"])
     line_colors = {curve_name: color / 255.0 for curve_name, color in zip(names, colors)}
-    return ExtractionResult(data_frame, pixels, PixelCalibration(x_slope, x_intercept, y_slope, y_intercept), line_colors)
+    # The accuracy of the values is 2.2 px: the calibration is good to 1 px, and the centre of a line that is about
+    # 4 px thick is good to 2 px. Its size in the data follows from the calibration. The plateaus of this figure differ
+    # from the stabilised temperatures in Fig. 16 of the paper by 0.11 °C (RMS), which also includes how the paper
+    # defines them.
+    pixel_accuracy = 2.2
+    return ExtractionResult(data_frame, pixels, PixelCalibration(x_slope, x_intercept, y_slope, y_intercept), line_colors,
+                            x_accuracy=pixel_accuracy * abs(x_slope), y_accuracy=pixel_accuracy * abs(y_slope))

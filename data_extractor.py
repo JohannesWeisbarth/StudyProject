@@ -49,11 +49,12 @@ def extract_figure(paper: str, fig: int,
     print(f"Caption for Fig. {fig} on page {(page.number or 0) + 1}")
 
     print(f"Extracting figure {fig} of {pdf_file.name} with {extract_plot.__name__}.")
-    extracted_data, original_plot, calibration_data, line_colors = extract_plot(document, page, caption)
+    result = extract_plot(document, page, caption)
 
     print(f"Computing the statistics of {pdf_file.name} figure {fig}.\n")
-    statistics: pd.DataFrame = compute_statistics(extracted_data, pdf_file.name)
-    return FigureResult(paper, fig, extracted_data, original_plot, calibration_data, line_colors, statistics)
+    statistics: pd.DataFrame = compute_statistics(result.extracted_data, pdf_file.name, result.x_accuracy, result.y_accuracy)
+    return FigureResult(paper, fig, result.extracted_data, result.original_plot, result.calibration_data,
+                        result.line_colors, statistics)
 
 
 def main() -> None:

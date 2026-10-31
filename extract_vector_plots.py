@@ -109,8 +109,9 @@ def pixel_calibration(to_data: Callable[[np.ndarray], np.ndarray], region_start:
 
 def build_result(page: pymupdf.Page, caption_rect: pymupdf.Rect, plot_frame: pymupdf.Rect,
                  curves: list[np.ndarray], curve_names: list[str],
-                 x_to_data: Callable[[np.ndarray], np.ndarray], y_to_data: Callable[[np.ndarray], np.ndarray]) -> ExtractionResult:
-    """Convert the curves to data values and add the rendered original figure."""
+                 x_to_data: Callable[[np.ndarray], np.ndarray], y_to_data: Callable[[np.ndarray], np.ndarray],
+                 x_accuracy: float, y_accuracy: float) -> ExtractionResult:
+    """Convert the curves to data values and add the rendered original figure and the accuracy of the values."""
     rows = []
     for curve_name, curve_points in zip(curve_names, curves):
         x_values, y_values = x_to_data(curve_points[:, 0]), y_to_data(curve_points[:, 1])
@@ -120,7 +121,7 @@ def build_result(page: pymupdf.Page, caption_rect: pymupdf.Rect, plot_frame: pym
     data_frame = pd.DataFrame(rows, columns=["series", "x", "y"])
     original_pixels, region = render_figure(page, plot_frame, caption_rect)
     calibration = PixelCalibration(*pixel_calibration(x_to_data, region.x0), *pixel_calibration(y_to_data, region.y0))
-    return ExtractionResult(data_frame, original_pixels, calibration, line_colors=None)
+    return ExtractionResult(data_frame, original_pixels, calibration, None, x_accuracy, y_accuracy)
 
 
 def linear_map(position_a: float, value_a: float, position_b: float, value_b: float) -> Callable[[np.ndarray], np.ndarray]:
@@ -148,8 +149,10 @@ def extract_huang2020_fig7(_document: pymupdf.Document, page: pymupdf.Page, capt
     print(f"Found {len(curves)} curves")
     if sorted(stroke_colors) != sorted(curve_names):
         sys.exit(f"The stroke colours of the curves are {stroke_colors}, but the figure is hardcoded for {list(curve_names)}.")
+    # The accuracy of the values is the largest deviation of a tick mark from the fit: 0.02 pt = 0.007 °C and
+    # 0.027 pt = 0.12 s. The coordinates of the curves are exact to 0.001 pt, which is 0.0004 °C.
     return build_result(page, caption_rect, plot_frame, curves, [curve_names[color] for color in stroke_colors],
-                        x_to_data, y_to_data)
+                        x_to_data, y_to_data, x_accuracy=0.12, y_accuracy=0.01)
 
 
 def extract_montesano2013_fig6(_document: pymupdf.Document, page: pymupdf.Page, caption_rect: pymupdf.Rect) -> ExtractionResult:
@@ -168,4 +171,7 @@ def extract_montesano2013_fig6(_document: pymupdf.Document, page: pymupdf.Page, 
     print(f"Found {len(curves)} curves")
     if len(curves) != len(curve_names):
         sys.exit(f"Found {len(curves)} curves, but the figure is hardcoded for {len(curve_names)} curves.")
-    return build_result(page, caption_rect, plot_frame, curves, curve_names, x_to_data, y_to_data)
+    # The accuracy of the values is the residual of the fit through the tick marks: 0.4 cycles and 0.011 °C.
+    # The coordinates of the curves are exact to 0.001 pt, which is below 0.0001 °C.
+    return build_result(page, caption_rect, plot_frame, curves, curve_names, x_to_data, y_to_data,
+                        x_accuracy=0.4, y_accuracy=0.011)

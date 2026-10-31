@@ -5,8 +5,11 @@ The statistics have the same columns for every figure, so the tables of several 
 - stress_level: stress level of the curve in % UTS, read from its name,
 - data_points: number of extracted points of the curve,
 - delta_t_plateau: temperature in the plateau, the median of the curve in the plateau,
-- temperature_jitter_plateau: standard deviation of the curve around a straight line through the plateau.
-Both temperatures are given in the unit of the y axis of the figure.
+- temperature_jitter_plateau: variance of the curve around a straight line through the plateau, in the unit of the
+  y axis squared,
+- x_accuracy, y_accuracy: uncertainty of the x and y values of the figure, in the unit of the axis. It is the same
+  for all curves of a figure and comes from the calibration and the resolution of the extraction.
+The temperature is given in the unit of the y axis of the figure.
 
 The plateau is the last quarter of the x range of the figure. A curve that does not reach it, for example a curve
 that ends early because the specimen failed, has no plateau and gets no temperatures.
@@ -30,7 +33,7 @@ def parse_stress_level(curve_name: str) -> float:
     return float(match.group(1)) if match else float("nan")
 
 
-def compute_statistics(extracted_data: pd.DataFrame, paper_pdf: str) -> pd.DataFrame:
+def compute_statistics(extracted_data: pd.DataFrame, paper_pdf: str, x_accuracy: float, y_accuracy: float) -> pd.DataFrame:
     """Compute the statistics of every extracted curve, sorted by stress level. The columns are described above."""
     plateau_start = extracted_data.x.max() - PLATEAU_FRACTION * (extracted_data.x.max() - extracted_data.x.min())
     rows = []
@@ -41,8 +44,9 @@ def compute_statistics(extracted_data: pd.DataFrame, paper_pdf: str) -> pd.DataF
             delta_t_plateau = float(plateau.y.median())
             # The jitter is measured around a straight line, so that a slow rise or fall in the plateau does not count.
             trend = np.polyval(np.polyfit(plateau.x, plateau.y, 1), plateau.x)
-            temperature_jitter_plateau = float(np.std(plateau.y - trend))
+            temperature_jitter_plateau = float(np.var(plateau.y - trend))
         rows.append({"paper_pdf": paper_pdf, "stress_level": parse_stress_level(str(curve_name)),
                      "data_points": len(curve), "delta_t_plateau": delta_t_plateau,
-                     "temperature_jitter_plateau": temperature_jitter_plateau})
+                     "temperature_jitter_plateau": temperature_jitter_plateau,
+                     "x_accuracy": x_accuracy, "y_accuracy": y_accuracy})
     return pd.DataFrame(rows).sort_values("stress_level", kind="stable", ignore_index=True)

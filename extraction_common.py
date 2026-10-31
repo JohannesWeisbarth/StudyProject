@@ -32,6 +32,8 @@ class ExtractionResult(NamedTuple):
     original_plot: np.ndarray                       # the figure as it appears in the paper, RGB pixels
     calibration_data: PixelCalibration              # maps pixels of original_plot to data values
     line_colors: dict[str, np.ndarray] | None       # RGB in 0..1 per series for the extracted plot, None for default colours
+    x_accuracy: float                               # uncertainty of the x values in the unit of the x axis
+    y_accuracy: float                               # uncertainty of the y values in the unit of the y axis
 
 
 class FigureResult(NamedTuple):
