@@ -22,14 +22,18 @@ RENDER_DPI = 200
 RENDER_MARGIN = (60, 15, 110, 40)
 
 
-def find_plot_frame(page: pymupdf.Page, caption_rect: pymupdf.Rect, max_gap: float = MAX_GAP) -> pymupdf.Rect:
-    """Find the rectangle of the plot frame just above the caption."""
+def find_plot_frame(page: pymupdf.Page, caption_rect: pymupdf.Rect, max_gap: float = MAX_GAP,
+                    search_area: pymupdf.Rect | None = None) -> pymupdf.Rect:
+    """Find the rectangle of the plot frame just above the caption.
+    search_area limits the search to the drawings inside it, for a figure with several panels."""
     page_area: float = page.rect.get_area()
     best_candidate: pymupdf.Rect | None = None
     best_candidate_key: tuple[bool, float] | None = None
     for drawing in page.get_drawings():
         drawing_rect: pymupdf.Rect = drawing["rect"]
         if drawing_rect.y1 > caption_rect.y0 + 2 or caption_rect.y0 - drawing_rect.y1 > max_gap:
+            continue
+        if search_area is not None and not search_area.contains(drawing_rect):
             continue
         if drawing_rect.width < 100 or drawing_rect.height < 60 or drawing_rect.get_area() > 0.7 * page_area:
             continue
@@ -60,10 +64,12 @@ def collect_path_points(drawing: dict) -> np.ndarray | None:
     return np.array(points) if points else None
 
 
-def collect_curves(page: pymupdf.Page, plot_frame: pymupdf.Rect) -> tuple[list[np.ndarray], list[str]]:
-    """Collect the curves in the plot frame in the order in which they are drawn.
+def collect_curves(page: pymupdf.Page, plot_frame: pymupdf.Rect, tolerance: float = 1.0,
+                   join_distance: float = 0.6) -> tuple[list[np.ndarray], list[str]]:
+    """Collect the curves in the plot frame in the order in which they are drawn. A curve has to lie inside the frame
+    enlarged by the tolerance in pt, which is also what lets a curve through that is drawn a little over the frame.
+    A path is joined to the one before it if it has the same style and starts within join_distance in pt of its end.
     Return the points of every curve in page coordinates and its stroke colour as hex colour."""
-    tolerance = 1.0
     plot_area = pymupdf.Rect(plot_frame.x0 - tolerance, plot_frame.y0 - tolerance,
                              plot_frame.x1 + tolerance, plot_frame.y1 + tolerance)
     curve_chains = []
@@ -78,7 +84,7 @@ def collect_curves(page: pymupdf.Page, plot_frame: pymupdf.Rect) -> tuple[list[n
         # stitch a path onto the previous one if it starts where that ended.
         if path_points is not None and len(path_points) >= 2 and curve_chains \
                 and curve_chains[-1]["style_key"] == style_key \
-                and np.hypot(*(curve_chains[-1]["points"][-1] - path_points[0])) < 0.6:
+                and np.hypot(*(curve_chains[-1]["points"][-1] - path_points[0])) < join_distance:
             curve_chains[-1]["points"] = np.vstack([curve_chains[-1]["points"], path_points[1:]])
         elif path_points is not None and len(path_points) >= MIN_POINTS:
             curve_chains.append({"style_key": style_key, "points": path_points})
@@ -156,6 +162,38 @@ def extract_huang2020_fig7(_document: pymupdf.Document, page: pymupdf.Page, capt
                    for color in stroke_colors}
     return build_result(page, caption_rect, plot_frame, curves, [curve_names[color] for color in stroke_colors],
                         x_to_data, y_to_data, x_accuracy=0.12, y_accuracy=0.01, line_colors=line_colors)
+
+
+def extract_huang2019_fig10(_document: pymupdf.Document, page: pymupdf.Page, caption_rect: pymupdf.Rect) -> ExtractionResult:
+    """Digitize Fig. 10(a) of Huang2019: the temperature rise in °C over the cycles for 13 stress levels, 30 to 90 % UTS.
+    The figure has two panels, only panel (a) on the left is digitized."""
+    plot_frame = find_plot_frame(page, caption_rect, search_area=pymupdf.Rect(0, 0, page.rect.x1 / 2, caption_rect.y0 + 2))
+
+    # The positions of the axis limits on the page in pt: 0 and 6000 cycles, 0 and 4.5 °C. They come from a fit through the
+    # 7 and 10 tick marks, which are short lines of their own. The plot frame lies at the limits within 0.04 pt (1 cycle).
+    x_to_data = linear_map(73.55428, 0, 293.75600, 6000)
+    y_to_data = linear_map(691.71408, 0, 560.11233, 4.5)
+
+    # The stroke colour of every curve in the order in which they are drawn, and its stress level. Three curves have the same
+    # colour, so the colours alone do not give the names. The names agree with the arrows of the legend for 30 to 65 %: the
+    # tip of each arrow ends within 0.4 pt of the right end of the curve. 70 to 90 % are labelled at their curves.
+    curve_levels = [("#e79651", "80% UTS"), ("#ed1c24", "30% UTS"), ("#ffc20d", "35% UTS"), ("#a6bd84", "45% UTS"),
+                    ("#238e85", "50% UTS"), ("#0089c9", "60% UTS"), ("#2375a7", "65% UTS"), ("#4c576f", "70% UTS"),
+                    ("#8c6b8b", "75% UTS"), ("#231f20", "85% UTS"), ("#7195be", "90% UTS"), ("#7195be", "55% UTS"),
+                    ("#7195be", "40% UTS")]
+    # The 90 % curve is drawn in two paths that overlap by 5 cycles and miss each other by 1.5 pt. It also runs up to 8 pt
+    # over the top of the frame (to 5.2 °C), the curve is drawn there and is kept.
+    curves, stroke_colors = collect_curves(page, plot_frame, tolerance=10.0, join_distance=2.0)
+    print(f"Found {len(curves)} curves")
+    if stroke_colors != [color for color, _ in curve_levels]:
+        sys.exit(f"The stroke colours of the curves are {stroke_colors}, but the figure is hardcoded for "
+                 f"{[color for color, _ in curve_levels]}.")
+    line_colors = {parse_stress_level(name): np.array([int(color[index:index + 2], 16) for index in (1, 3, 5)]) / 255.0
+                   for color, name in curve_levels}
+    # The accuracy of the values is the largest deviation of a tick mark from the fit: 0.99 cycles and 0.0011 °C.
+    # The coordinates of the curves are exact to 0.001 pt.
+    return build_result(page, caption_rect, plot_frame, curves, [name for _, name in curve_levels], x_to_data, y_to_data,
+                        x_accuracy=1.0, y_accuracy=0.002, line_colors=line_colors)
 
 
 def extract_montesano2013_fig6(_document: pymupdf.Document, page: pymupdf.Page, caption_rect: pymupdf.Rect) -> ExtractionResult:
