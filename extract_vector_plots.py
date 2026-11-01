@@ -9,10 +9,9 @@ import sys
 from typing import Callable
 
 import numpy as np
-import pandas as pd
 import pymupdf
 
-from extraction_common import MAX_GAP, ExtractionResult, PixelCalibration
+from extraction_common import MAX_GAP, ExtractionResult, PixelCalibration, parse_stress_level
 
 # A path with fewer points is not a curve.
 MIN_POINTS = 10
@@ -110,18 +109,19 @@ def pixel_calibration(to_data: Callable[[np.ndarray], np.ndarray], region_start:
 def build_result(page: pymupdf.Page, caption_rect: pymupdf.Rect, plot_frame: pymupdf.Rect,
                  curves: list[np.ndarray], curve_names: list[str],
                  x_to_data: Callable[[np.ndarray], np.ndarray], y_to_data: Callable[[np.ndarray], np.ndarray],
-                 x_accuracy: float, y_accuracy: float) -> ExtractionResult:
-    """Convert the curves to data values and add the rendered original figure and the accuracy of the values."""
-    rows = []
+                 x_accuracy: float, y_accuracy: float,
+                 line_colors: dict[float, np.ndarray] | None = None) -> ExtractionResult:
+    """Convert the curves to data values and add the rendered original figure and the accuracy of the values.
+    line_colors are the colours of the curves in the paper, if they have different ones."""
+    lines: dict[float, np.ndarray] = {}
     for curve_name, curve_points in zip(curve_names, curves):
         x_values, y_values = x_to_data(curve_points[:, 0]), y_to_data(curve_points[:, 1])
         # The path of a curve does not always run from left to right, so sort its points by x.
         order = np.argsort(x_values, kind="stable")
-        rows.extend(zip([curve_name] * len(order), x_values[order], y_values[order]))
-    data_frame = pd.DataFrame(rows, columns=["series", "x", "y"])
+        lines[parse_stress_level(curve_name)] = np.column_stack([x_values[order], y_values[order]])
     original_pixels, region = render_figure(page, plot_frame, caption_rect)
     calibration = PixelCalibration(*pixel_calibration(x_to_data, region.x0), *pixel_calibration(y_to_data, region.y0))
-    return ExtractionResult(data_frame, original_pixels, calibration, None, x_accuracy, y_accuracy)
+    return ExtractionResult(lines, original_pixels, calibration, line_colors, x_accuracy, y_accuracy)
 
 
 def linear_map(position_a: float, value_a: float, position_b: float, value_b: float) -> Callable[[np.ndarray], np.ndarray]:
@@ -151,8 +151,11 @@ def extract_huang2020_fig7(_document: pymupdf.Document, page: pymupdf.Page, capt
         sys.exit(f"The stroke colours of the curves are {stroke_colors}, but the figure is hardcoded for {list(curve_names)}.")
     # The accuracy of the values is the largest deviation of a tick mark from the fit: 0.02 pt = 0.007 °C and
     # 0.027 pt = 0.12 s. The coordinates of the curves are exact to 0.001 pt, which is 0.0004 °C.
+    # The extracted plot keeps the colours of the curves in the paper.
+    line_colors = {parse_stress_level(curve_names[color]): np.array([int(color[index:index + 2], 16) for index in (1, 3, 5)]) / 255.0
+                   for color in stroke_colors}
     return build_result(page, caption_rect, plot_frame, curves, [curve_names[color] for color in stroke_colors],
-                        x_to_data, y_to_data, x_accuracy=0.12, y_accuracy=0.01)
+                        x_to_data, y_to_data, x_accuracy=0.12, y_accuracy=0.01, line_colors=line_colors)
 
 
 def extract_montesano2013_fig6(_document: pymupdf.Document, page: pymupdf.Page, caption_rect: pymupdf.Rect) -> ExtractionResult:
