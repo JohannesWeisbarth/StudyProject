@@ -1,5 +1,4 @@
-"""Writing of the results of the extraction: the data, the plots and the statistics.
-All results are written to the results directory, in the directory the script is started in.
+"""Write the results of the extraction.
 """
 from __future__ import annotations
 
@@ -16,6 +15,8 @@ import pandas as pd
 
 from extraction_common import FigureResult, PixelCalibration
 
+# The directory of all digitization results.
+DIGITIZATION_DIRECTORY = Path("results") / "digitization"
 # Size of the extracted points in the overlay in pt^2. Points are tiny so the original line is still visible.
 MARKER_SIZE = 0.3
 
@@ -76,8 +77,8 @@ def lines_to_frame(lines: dict[float, np.ndarray]) -> pd.DataFrame:
 
 def save_figure(figure: FigureResult) -> None:
     """Write the data and the plots of one figure."""
-    # Every result file of this figure starts with this path, e.g. results/plot_data/Jia2023_fig14_data.csv
-    plot_path = Path("results") / "plot_data" / f"{figure.paper}_fig{figure.fig}"
+    # Every result file of this figure starts with this path, e.g. results/digitization/Jia2023/fig14_data.csv
+    plot_path = DIGITIZATION_DIRECTORY / figure.paper / f"fig{figure.fig}"
     plot_path.parent.mkdir(parents=True, exist_ok=True)
 
     lines_to_frame(figure.extraction_result.extracted_data).to_csv(f"{plot_path}_data.csv", index=False)
@@ -90,7 +91,7 @@ def save_figure(figure: FigureResult) -> None:
 
 
 def save_curves(figures: list[FigureResult]) -> None:
-    """Write the normalized curves of all figures to results/extracted_curves.json, nested as {paper: {stress level: {n, x, y}}}.
+    """Write the normalized curves of all figures to results/digitization/extracted_curves.json, nested as {paper: {stress level: {n, x, y}}}.
     For every curve n is the number of the point, x the cycle number and y the temperature rise. The stress level is the
     key as text in % UTS, e.g. "87.5"."""
     curves: dict[str, dict[str, dict[str, list]]] = {}
@@ -99,16 +100,16 @@ def save_curves(figures: list[FigureResult]) -> None:
         for stress_level, line in figure.normalized_data.items():
             paper_curves[f"{stress_level:g}"] = {"n": np.arange(len(line)).tolist(), "x": line[:, 0].tolist(),
                                                  "y": line[:, 1].tolist()}
-    Path("results").mkdir(exist_ok=True)
-    with open(Path("results") / "extracted_curves.json", "w") as curves_file:
+    DIGITIZATION_DIRECTORY.mkdir(parents=True, exist_ok=True)
+    with open(DIGITIZATION_DIRECTORY / "extracted_curves.json", "w") as curves_file:
         json.dump(curves, curves_file)
-    print("Wrote results/extracted_curves.json.")
+    print(f"Wrote {DIGITIZATION_DIRECTORY / 'extracted_curves.json'}.")
 
 
 def save_statistics(figures: list[FigureResult]) -> None:
     """Join the statistics of all figures into one table and write it."""
     statistics = pd.concat([figure.statistics for figure in figures], ignore_index=True)
-    Path("results").mkdir(exist_ok=True)
-    statistics.to_csv(Path("results") / "statistics.csv", index=False, float_format="%.4g")
+    DIGITIZATION_DIRECTORY.mkdir(parents=True, exist_ok=True)
+    statistics.to_csv(DIGITIZATION_DIRECTORY / "statistics.csv", index=False, float_format="%.4g")
     print(statistics.to_string(index=False, float_format=lambda value: f"{value:.3g}"))
-    print("\nDone writing results/statistics.csv.")
+    print(f"\nDone writing {DIGITIZATION_DIRECTORY / 'statistics.csv'}.")

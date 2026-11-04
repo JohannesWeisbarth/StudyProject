@@ -1,4 +1,4 @@
-"""PyTorch dataset for the extracted temperature curves, read from the results/extracted_curves.json that data_extractor.py writes.
+"""PyTorch dataset for the extracted temperature curves, read from the results/digitization/extracted_curves.json that data_extractor.py writes.
 
 A curve is the temperature rise y in °C over the cycle number x at one stress level in % UTS of one paper.
 A sample is one curve: a dict with the paper, the stress level, the cycles x and the temperature rise y of the curve.
@@ -17,7 +17,7 @@ class CurveDataset(Dataset):
     - Huang 2020
     - Jia 2023."""
 
-    def __init__(self, filepath: str = "results/extracted_curves.json", dtype: torch.dtype = torch.float32) -> None:
+    def __init__(self, filepath: str = "results/digitization/extracted_curves.json", dtype: torch.dtype = torch.float32) -> None:
         with open(filepath) as file:
             extracted_curves = json.load(file)
         self.curves: list[dict] = []

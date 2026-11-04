@@ -26,8 +26,8 @@ from curve_dataset import CurveDataset
 
 logger = logging.getLogger(__name__)
 
-# All results of the fits are written to this directory, in the directory the script is started in.
-OUTPUT_DIRECTORY = Path("results") / "exponential_fit"
+# All results of the fits are written to this directory, in the directory the script is started in, one folder per paper.
+OUTPUT_DIRECTORY = Path("results") / "exponential_fits"
 # The papers that are fitted: vector figures with exact points.
 PAPERS = ("Huang2019_IJF", "Huang2020_EFM")
 # The heating rate of the data is the slope of a straight line through the points of the first cycles.
@@ -174,11 +174,10 @@ def main() -> None:
             logger.info(" %9.1f %% %17.4g %15.3f %12.3f %14.2f",
                         float(curve["stress_level"]), 1000.0 * heating_rate, delta_t, rmse, rmse / delta_t)
             fitted_curves.append((curve, heating_rate, delta_t))
-        for plot, file_name in ((plot_fits, f"exponential_fit_{paper}.png"),
-                                (plot_parameters, f"exponential_parameters_{paper}.png"),
-                                (plot_fits_compact, f"exponential_fit_compact{paper}.png")):
-            plot(paper, fitted_curves, OUTPUT_DIRECTORY / file_name)
-            logger.info("Wrote %s.", OUTPUT_DIRECTORY / file_name)
+        for plot, file_name in ((plot_fits, "fits.png"), (plot_parameters, "parameters.png"),
+                                (plot_fits_compact, "fits_compact.png")):
+            plot(paper, fitted_curves, OUTPUT_DIRECTORY / paper / file_name)
+            logger.info("Wrote %s.", OUTPUT_DIRECTORY / paper / file_name)
 
 
 if __name__ == "__main__":
