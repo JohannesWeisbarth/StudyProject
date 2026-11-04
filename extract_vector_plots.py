@@ -117,17 +117,29 @@ def build_result(page: pymupdf.Page, caption_rect: pymupdf.Rect, plot_frame: pym
                  x_to_data: Callable[[np.ndarray], np.ndarray], y_to_data: Callable[[np.ndarray], np.ndarray],
                  x_accuracy: float, y_accuracy: float,
                  line_colors: dict[float, np.ndarray] | None = None) -> ExtractionResult:
-    """Convert the curves to data values and add the rendered original figure and the accuracy of the values.
+    """Convert the curves to data values, resampled to one point per pixel column of the rendered original figure, and add
+    that figure and the accuracy of the values.
     line_colors are the colours of the curves in the paper, if they have different ones."""
+    original_pixels, region = render_figure(page, plot_frame, caption_rect)
+    calibration = PixelCalibration(*pixel_calibration(x_to_data, region.x0), *pixel_calibration(y_to_data, region.y0))
     lines: dict[float, np.ndarray] = {}
     for curve_name, curve_points in zip(curve_names, curves):
         x_values, y_values = x_to_data(curve_points[:, 0]), y_to_data(curve_points[:, 1])
-        # The path of a curve does not always run from left to right, so sort its points by x.
-        order = np.argsort(x_values, kind="stable")
-        lines[parse_stress_level(curve_name)] = np.column_stack([x_values[order], y_values[order]])
-    original_pixels, region = render_figure(page, plot_frame, caption_rect)
-    calibration = PixelCalibration(*pixel_calibration(x_to_data, region.x0), *pixel_calibration(y_to_data, region.y0))
+        lines[parse_stress_level(curve_name)] = resample_curve(x_values, y_values, abs(calibration.x_slope))
     return ExtractionResult(lines, original_pixels, calibration, line_colors, x_accuracy, y_accuracy)
+
+
+def resample_curve(x_values: np.ndarray, y_values: np.ndarray, step: float) -> np.ndarray:
+    """Resample a curve to evenly spaced x values, one point per step, from its first to its last x. Return the points as
+    an array (n, 2) of x and y. The vertices of a path are dense at the bends and far apart on a straight stretch, so
+    its points alone would weight the bends more than the straight parts. Between the vertices the path is a straight line,
+    so the linear interpolation is exact there."""
+    # The path of a curve does not always run from left to right, so sort its points by x. Points with the same x, for
+    # example where two paths of a curve overlap, are merged to their mean y.
+    unique_x, inverse = np.unique(x_values, return_inverse=True)
+    mean_y = np.bincount(inverse, weights=y_values) / np.bincount(inverse)
+    grid = np.append(np.arange(unique_x[0], unique_x[-1], step), unique_x[-1])
+    return np.column_stack([grid, np.interp(grid, unique_x, mean_y)])
 
 
 def linear_map(position_a: float, value_a: float, position_b: float, value_b: float) -> Callable[[np.ndarray], np.ndarray]:
