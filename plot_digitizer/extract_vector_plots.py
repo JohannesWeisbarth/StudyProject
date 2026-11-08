@@ -5,13 +5,16 @@ no tick marks, the axis limits are known and hardcoded in the function of the fi
 """
 from __future__ import annotations
 
-import sys
+import logging
 from typing import Callable
 
 import numpy as np
 import pymupdf
 
-from extraction_common import MAX_GAP, ExtractionResult, PixelCalibration, parse_stress_level
+from extraction_common import (MAX_GAP, ExtractionError, ExtractedFigure, PixelCalibration, hex_to_rgb, parse_stress_level,
+                           rgb_to_hex)
+
+logger = logging.getLogger(__name__)
 
 # A path with fewer points is not a curve.
 MIN_POINTS = 10
@@ -44,7 +47,7 @@ def find_plot_frame(page: pymupdf.Page, caption_rect: pymupdf.Rect, max_gap: flo
         if best_candidate_key is None or key > best_candidate_key:
             best_candidate, best_candidate_key = drawing_rect, key
     if best_candidate is None:
-        sys.exit("No plot frame found above the caption.")
+        raise ExtractionError("No plot frame found above the caption.")
     return best_candidate
 
 
@@ -88,8 +91,7 @@ def collect_curves(page: pymupdf.Page, plot_frame: pymupdf.Rect, tolerance: floa
             curve_chains[-1]["points"] = np.vstack([curve_chains[-1]["points"], path_points[1:]])
         elif path_points is not None and len(path_points) >= MIN_POINTS:
             curve_chains.append({"style_key": style_key, "points": path_points})
-    stroke_colors = ["#" + "".join(f"{round(channel * 255):02x}" for channel in chain["style_key"][0])
-                     for chain in curve_chains]
+    stroke_colors = [rgb_to_hex(np.array(chain["style_key"][0]) * 255) for chain in curve_chains]
     return [chain["points"] for chain in curve_chains], stroke_colors
 
 
@@ -116,7 +118,7 @@ def build_result(page: pymupdf.Page, caption_rect: pymupdf.Rect, plot_frame: pym
                  curves: list[np.ndarray], curve_names: list[str],
                  x_to_data: Callable[[np.ndarray], np.ndarray], y_to_data: Callable[[np.ndarray], np.ndarray],
                  x_accuracy: float, y_accuracy: float,
-                 line_colors: dict[float, np.ndarray] | None = None) -> ExtractionResult:
+                 line_colors: dict[float, np.ndarray] | None = None) -> ExtractedFigure:
     """Convert the curves to data values, resampled to one point per pixel column of the rendered original figure, and add
     that figure and the accuracy of the values.
     line_colors are the colours of the curves in the paper, if they have different ones."""
@@ -126,7 +128,7 @@ def build_result(page: pymupdf.Page, caption_rect: pymupdf.Rect, plot_frame: pym
     for curve_name, curve_points in zip(curve_names, curves):
         x_values, y_values = x_to_data(curve_points[:, 0]), y_to_data(curve_points[:, 1])
         lines[parse_stress_level(curve_name)] = resample_curve(x_values, y_values, abs(calibration.x_slope))
-    return ExtractionResult(lines, original_pixels, calibration, line_colors, x_accuracy, y_accuracy)
+    return ExtractedFigure(lines, original_pixels, calibration, line_colors, x_accuracy, y_accuracy)
 
 
 def resample_curve(x_values: np.ndarray, y_values: np.ndarray, step: float) -> np.ndarray:
@@ -147,7 +149,7 @@ def linear_map(position_a: float, value_a: float, position_b: float, value_b: fl
     return lambda position: value_a + (position - position_a) / (position_b - position_a) * (value_b - value_a)
 
 
-def extract_huang2020_fig7(_document: pymupdf.Document, page: pymupdf.Page, caption_rect: pymupdf.Rect) -> ExtractionResult:
+def extract_huang2020_fig7(_document: pymupdf.Document, page: pymupdf.Page, caption_rect: pymupdf.Rect) -> ExtractedFigure:
     """Digitize Fig. 7 of Huang2020: the temperature increase in °C over the time in s for 12 stress levels."""
     plot_frame = find_plot_frame(page, caption_rect)
 
@@ -164,19 +166,18 @@ def extract_huang2020_fig7(_document: pymupdf.Document, page: pymupdf.Page, capt
         "#fde21e": "70% UTS", "#e9922a": "75% UTS", "#ef5f2b": "80% UTS", "#ed2c82": "85% UTS",
     }
     curves, stroke_colors = collect_curves(page, plot_frame)
-    print(f"Found {len(curves)} curves")
+    logger.info(f"Found {len(curves)} curves")
     if sorted(stroke_colors) != sorted(curve_names):
-        sys.exit(f"The stroke colours of the curves are {stroke_colors}, but the figure is hardcoded for {list(curve_names)}.")
+        raise ExtractionError(f"The stroke colours of the curves are {stroke_colors}, but the figure is hardcoded for {list(curve_names)}.")
     # The accuracy of the values is the largest deviation of a tick mark from the fit: 0.02 pt = 0.007 °C and
     # 0.027 pt = 0.12 s. The coordinates of the curves are exact to 0.001 pt, which is 0.0004 °C.
     # The extracted plot keeps the colours of the curves in the paper.
-    line_colors = {parse_stress_level(curve_names[color]): np.array([int(color[index:index + 2], 16) for index in (1, 3, 5)]) / 255.0
-                   for color in stroke_colors}
+    line_colors = {parse_stress_level(curve_names[color]): hex_to_rgb(color) / 255.0 for color in stroke_colors}
     return build_result(page, caption_rect, plot_frame, curves, [curve_names[color] for color in stroke_colors],
                         x_to_data, y_to_data, x_accuracy=0.12, y_accuracy=0.01, line_colors=line_colors)
 
 
-def extract_huang2019_fig10(_document: pymupdf.Document, page: pymupdf.Page, caption_rect: pymupdf.Rect) -> ExtractionResult:
+def extract_huang2019_fig10(_document: pymupdf.Document, page: pymupdf.Page, caption_rect: pymupdf.Rect) -> ExtractedFigure:
     """Digitize Fig. 10(a) of Huang2019: the temperature rise in °C over the cycles for 13 stress levels, 30 to 90 % UTS.
     The figure has two panels, only panel (a) on the left is digitized."""
     plot_frame = find_plot_frame(page, caption_rect, search_area=pymupdf.Rect(0, 0, page.rect.x1 / 2, caption_rect.y0 + 2))
@@ -196,20 +197,21 @@ def extract_huang2019_fig10(_document: pymupdf.Document, page: pymupdf.Page, cap
     # The 90 % curve is drawn in two paths that overlap by 5 cycles and miss each other by 1.5 pt. It also runs up to 8 pt
     # over the top of the frame (to 5.2 °C), the curve is drawn there and is kept.
     curves, stroke_colors = collect_curves(page, plot_frame, tolerance=10.0, join_distance=2.0)
-    print(f"Found {len(curves)} curves")
+    logger.info(f"Found {len(curves)} curves")
     if stroke_colors != [color for color, _ in curve_levels]:
-        sys.exit(f"The stroke colours of the curves are {stroke_colors}, but the figure is hardcoded for "
-                 f"{[color for color, _ in curve_levels]}.")
-    line_colors = {parse_stress_level(name): np.array([int(color[index:index + 2], 16) for index in (1, 3, 5)]) / 255.0
-                   for color, name in curve_levels}
+        raise ExtractionError(f"The stroke colours of the curves are {stroke_colors}, but the figure is hardcoded for "
+                              f"{[color for color, _ in curve_levels]}.")
+    line_colors = {parse_stress_level(name): hex_to_rgb(color) / 255.0 for color, name in curve_levels}
     # The accuracy of the values is the largest deviation of a tick mark from the fit: 0.99 cycles and 0.0011 °C.
     # The coordinates of the curves are exact to 0.001 pt.
     return build_result(page, caption_rect, plot_frame, curves, [name for _, name in curve_levels], x_to_data, y_to_data,
                         x_accuracy=1.0, y_accuracy=0.002, line_colors=line_colors)
 
 
-def extract_montesano2013_fig6(_document: pymupdf.Document, page: pymupdf.Page, caption_rect: pymupdf.Rect) -> ExtractionResult:
-    """Digitize Fig. 6 of Montesano2013: the temperature in °C over the cycles for 12 stress levels."""
+def extract_montesano2013_fig6(_document: pymupdf.Document, page: pymupdf.Page, caption_rect: pymupdf.Rect) -> ExtractedFigure:
+    """Digitize Fig. 6 of Montesano2013: the temperature in °C over the cycles for 12 stress levels.
+    The figure plots the absolute temperature of one specimen through all stress levels in a row and gives no ambient
+    temperature, so the lowest first temperature of its curves is used as the ambient one when the curves are normalized."""
     plot_frame = find_plot_frame(page, caption_rect)
 
     # The positions of the axis limits on the page in pt: 0 and 7000 cycles, 24 and 40 °C. They come from a fit through all
@@ -221,9 +223,9 @@ def extract_montesano2013_fig6(_document: pymupdf.Document, page: pymupdf.Page, 
     curve_names = ["30% UTS", "35% UTS", "40% UTS", "45% UTS", "50% UTS", "55% UTS",
                    "60% UTS", "65% UTS", "70% UTS", "75% UTS", "80% UTS", "85% UTS"]
     curves, _ = collect_curves(page, plot_frame)
-    print(f"Found {len(curves)} curves")
+    logger.info(f"Found {len(curves)} curves")
     if len(curves) != len(curve_names):
-        sys.exit(f"Found {len(curves)} curves, but the figure is hardcoded for {len(curve_names)} curves.")
+        raise ExtractionError(f"Found {len(curves)} curves, but the figure is hardcoded for {len(curve_names)} curves.")
     # The accuracy of the values is the residual of the fit through the tick marks: 0.4 cycles and 0.011 °C.
     # The coordinates of the curves are exact to 0.001 pt, which is below 0.0001 °C.
     return build_result(page, caption_rect, plot_frame, curves, curve_names, x_to_data, y_to_data,

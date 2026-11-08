@@ -6,15 +6,18 @@ are found by their colours. The axes are calibrated from the tick labels, which 
 """
 from __future__ import annotations
 
+import logging
 import re
-import sys
 import unicodedata
 
 import numpy as np
 import pymupdf
 from PIL import Image
 
-from extraction_common import MAX_GAP, ExtractionResult, PixelCalibration, parse_stress_level
+from extraction_common import (MAX_GAP, ExtractionError, ExtractedFigure, PixelCalibration, hex_to_rgb, parse_stress_level,
+                           rgb_to_hex)
+
+logger = logging.getLogger(__name__)
 
 # A number, for example a tick label. The minus can be the typographic minus or the en dash.
 NUMBER_PATTERN = re.compile(r"^[-−–]?\d+(\.\d+)?$")
@@ -49,7 +52,7 @@ def fit_axis(label_positions: list[float] | np.ndarray, label_values: list[float
     positions, values = np.asarray(label_positions, dtype=float), np.asarray(label_values, dtype=float)
     slope, intercept = np.polyfit(positions, values, 1)
     max_residual = np.max(np.abs(slope * positions + intercept - values)) if len(positions) > 2 else 0.0
-    print(f"{axis}-axis: {len(positions)} labels, max residual {max_residual:.3g}")
+    logger.info(f"{axis}-axis: {len(positions)} labels, max residual {max_residual:.3g}")
     return slope, intercept
 
 
@@ -66,7 +69,7 @@ def find_figure_image(page: pymupdf.Page, caption_rect: pymupdf.Rect) -> tuple[i
             if best_gap is None or gap < best_gap:
                 best_gap, best_xref, best_rect = gap, xref, image_rect
     if best_xref is None or best_rect is None:
-        sys.exit("No embedded image found directly above the caption.")
+        raise ExtractionError("No embedded image found directly above the caption.")
     return best_xref, best_rect
 
 
@@ -86,7 +89,7 @@ def get_ocr_engine():
         try:
             from rapidocr_onnxruntime import RapidOCR
         except ImportError:
-            sys.exit("OCR engine missing. Install it with: pip install rapidocr-onnxruntime")
+            raise ExtractionError("OCR engine missing. Install it with: pip install rapidocr-onnxruntime")
         _OCR_ENGINE = RapidOCR()
     return _OCR_ENGINE
 
@@ -110,7 +113,7 @@ def longest_run(mask: np.ndarray) -> tuple[int, int]:
     changes = np.diff(padded)
     starts, ends = np.where(changes == 1)[0], np.where(changes == -1)[0] - 1
     if len(starts) == 0:
-        sys.exit("No axes frame found in the image.")
+        raise ExtractionError("No axes frame found in the image.")
     longest = np.argmax(ends - starts)
     return int(starts[longest]), int(ends[longest])
 
@@ -124,7 +127,7 @@ def find_image_frame(pixels: np.ndarray) -> tuple[int, int, int, int]:
     x_left = int(np.argmax(column_counts[:width // 2]))
     _, x_right = longest_run(dark[y_bottom])
     y_top, _ = longest_run(dark[:, x_left])
-    print(f"Plot frame (px): x {x_left}..{x_right}, y {y_top}..{y_bottom}")
+    logger.info(f"Plot frame (px): x {x_left}..{x_right}, y {y_top}..{y_bottom}")
     return x_left, x_right, y_top, y_bottom
 
 
@@ -199,10 +202,10 @@ def calibrate_axis(text_boxes: list, frame: tuple[int, int, int, int], axis: str
             label_positions.append(center_y); label_values.append(float(text))
     if len(label_positions) < 2:
         label_positions, label_values = read_labels_by_projection(pixels, frame, axis)
-        print(f"{axis}-axis: text detection found <2 labels, recognised {len(label_positions)} by projection")
+        logger.info(f"{axis}-axis: text detection found <2 labels, recognised {len(label_positions)} by projection")
     if len(label_positions) < 2:
-        sys.exit(f"Found <2 numeric tick labels for the {axis} axis (OCR read: "
-                 f"{[box[0] for box in text_boxes]}).")
+        raise ExtractionError(f"Found <2 numeric tick labels for the {axis} axis (OCR read: "
+                              f"{[box[0] for box in text_boxes]}).")
     return fit_axis(label_positions, label_values, axis)
 
 
@@ -279,24 +282,14 @@ def trace_curves(pixels: np.ndarray, mask: np.ndarray, curve_colors: np.ndarray)
     for color_index, color in enumerate(curve_colors):
         in_color = (assignment == color_index) & (distances < COLOR_TOLERANCE)
         if len(np.unique(columns[in_color])) < MIN_CURVE_COLUMNS:
-            print(f"WARNING: colour {to_hex(color)} covers <{MIN_CURVE_COLUMNS} pixel columns, skipped.")
+            logger.warning(f"colour {rgb_to_hex(color)} covers <{MIN_CURVE_COLUMNS} pixel columns, skipped.")
             continue
         curves.append(track_curve(columns[in_color], rows[in_color]))
         colors.append(color)
     return curves, colors
 
 
-def to_hex(color: np.ndarray) -> str:
-    return "#" + "".join(f"{int(round(channel)):02x}" for channel in color)
-
-
-def from_hex(hex_colors: list[str]) -> np.ndarray:
-    """['#8c6365', '#7b7a7b'] -> RGB array."""
-    return np.array([[int(hex_color.lstrip("#")[index:index + 2], 16) for index in (0, 2, 4)]
-                     for hex_color in hex_colors], dtype=float)
-
-
-def extract_jia2023_fig14(document: pymupdf.Document, page: pymupdf.Page, caption_rect: pymupdf.Rect) -> ExtractionResult:
+def extract_jia2023_fig14(document: pymupdf.Document, page: pymupdf.Page, caption_rect: pymupdf.Rect) -> ExtractedFigure:
     """Digitize Fig. 14 of Jia2023: the temperature increase in °C over the cycles for 20 stress levels.
     The figure is an image. The curves are found by their colours."""
     # The colours of the curves in the image and their names, from top to bottom at the right edge of the plot.
@@ -311,7 +304,7 @@ def extract_jia2023_fig14(document: pymupdf.Document, page: pymupdf.Page, captio
     }
     xref, _ = find_figure_image(page, caption_rect)
     pixels = load_image_pixels(document, xref)
-    print(f"Figure image: xref {xref}, {pixels.shape[1]}x{pixels.shape[0]} px")
+    logger.info(f"Figure image: xref {xref}, {pixels.shape[1]}x{pixels.shape[0]} px")
 
     # The axes are calibrated with the tick labels, which are read by OCR.
     text_boxes = read_text(pixels)
@@ -321,15 +314,15 @@ def extract_jia2023_fig14(document: pymupdf.Document, page: pymupdf.Page, captio
 
     # Text inside the plot, for example the label of a curve, is not part of a curve.
     mask = curve_ink_mask(pixels, frame, [box for box in text_boxes if not NUMBER_PATTERN.match(box[0])])
-    curves, colors = trace_curves(pixels, mask, from_hex(list(curve_names)))
-    print(f"Found {len(curves)} of {len(curve_names)} curves")
-    names = [curve_names[to_hex(color)] for color in colors]
+    curves, colors = trace_curves(pixels, mask, np.array([hex_to_rgb(color) for color in curve_names]))
+    logger.info(f"Found {len(curves)} of {len(curve_names)} curves")
+    names = [curve_names[rgb_to_hex(color)] for color in colors]
 
     lines: dict[float, np.ndarray] = {
         parse_stress_level(curve_name): np.column_stack([x_slope * curve[:, 0] + x_intercept, y_slope * curve[:, 1] + y_intercept])
         for curve_name, curve in zip(names, curves)}
     if not lines:
-        sys.exit("Nothing extracted.")
+        raise ExtractionError("Nothing extracted.")
 
     line_colors = {parse_stress_level(curve_name): color / 255.0 for curve_name, color in zip(names, colors)}
     # The accuracy of the values is 2.2 px: the calibration is good to 1 px, and the centre of a line that is about
@@ -337,5 +330,5 @@ def extract_jia2023_fig14(document: pymupdf.Document, page: pymupdf.Page, captio
     # from the stabilised temperatures in Fig. 16 of the paper by 0.11 °C (RMS), which also includes how the paper
     # defines them.
     pixel_accuracy = 2.2
-    return ExtractionResult(lines, pixels, PixelCalibration(x_slope, x_intercept, y_slope, y_intercept), line_colors,
+    return ExtractedFigure(lines, pixels, PixelCalibration(x_slope, x_intercept, y_slope, y_intercept), line_colors,
                             x_accuracy=pixel_accuracy * abs(x_slope), y_accuracy=pixel_accuracy * abs(y_slope))

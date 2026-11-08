@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import matplotlib
@@ -13,10 +14,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from extraction_common import FigureResult, PixelCalibration
+from extraction_common import ExtractionResult, FigureMetadata, PixelCalibration
 
-# The directory of all digitization results.
-DIGITIZATION_DIRECTORY = Path("results") / "digitization"
+logger = logging.getLogger(__name__)
+
+# The directory of all digitization results, in the results folder that is shared with the training.
+DIGITIZATION_DIRECTORY = Path(__file__).resolve().parent / ".." / "results" / "digitization"
+EXTRACTED_CURVES_FILE = DIGITIZATION_DIRECTORY / "extracted_curves.json"
 # Size of the extracted points in the overlay in pt^2. Points are tiny so the original line is still visible.
 MARKER_SIZE = 0.3
 
@@ -75,41 +79,35 @@ def lines_to_frame(lines: dict[float, np.ndarray]) -> pd.DataFrame:
                       for stress_level, line in lines.items()], ignore_index=True)
 
 
-def save_figure(figure: FigureResult) -> None:
+def save_figure(metadata: FigureMetadata, result: ExtractionResult) -> None:
     """Write the data and the plots of one figure."""
     # Every result file of this figure starts with this path, e.g. results/digitization/Jia2023/fig14_data.csv
-    plot_path = DIGITIZATION_DIRECTORY / figure.paper / f"fig{figure.fig}"
+    plot_path = DIGITIZATION_DIRECTORY / metadata.paper_name / f"fig{metadata.figure}"
     plot_path.parent.mkdir(parents=True, exist_ok=True)
 
-    lines_to_frame(figure.extraction_result.extracted_data).to_csv(f"{plot_path}_data.csv", index=False)
+    lines_to_frame(result.extracted_data).to_csv(f"{plot_path}_data.csv", index=False)
     # The result of the exttraction and the original plot are stored for comparison.
-    save_extracted_plot(figure.extraction_result.extracted_data, f"{plot_path}_extracted.png", figure.extraction_result.line_colors)
-    save_original_plot(figure.extraction_result.original_plot, f"{plot_path}_original.png")
-    save_overlay_plot(figure.extraction_result.extracted_data, figure.extraction_result.original_plot, figure.extraction_result.calibration_data,
+    save_extracted_plot(result.extracted_data, f"{plot_path}_extracted.png", result.line_colors)
+    save_original_plot(result.original_plot, f"{plot_path}_original.png")
+    save_overlay_plot(result.extracted_data, result.original_plot, result.calibration_data,
                       f"{plot_path}_overlay.png")
-    print(f"Wrote the files of {figure.paper} figure {figure.fig} to {plot_path.parent}.")
+    logger.info(f"Wrote the files of {metadata.paper_name} figure {metadata.figure} to {plot_path.parent}.")
 
 
-def save_curves(figures: list[FigureResult]) -> None:
-    """Write the normalized curves of all figures to results/digitization/extracted_curves.json, nested as {paper: {stress level: {n, x, y}}}.
-    For every curve n is the number of the point, x the cycle number and y the temperature rise. The stress level is the
-    key as text in % UTS, e.g. "87.5"."""
-    curves: dict[str, dict[str, dict[str, list]]] = {}
-    for figure in figures:
-        paper_curves = curves.setdefault(figure.paper, {})
-        for stress_level, line in figure.normalized_data.items():
+def save_curves(figures: list[tuple[FigureMetadata, ExtractionResult]]) -> None:
+    """Write the normalized curves of all figures to results/digitization/extracted_curves.json, nested as
+    {paper: {"setup": {parameter: value}, "accuracy": {"x": ..., "y": ...}, "curves": {stress level: {n, x, y}}}}.
+    The setup is the test setup of the paper, from its FigureMetadata. The accuracy is the uncertainty of the x values
+    in s and of the y values in K, it comes from the calibration of the extraction. For every curve n is the number of the point,
+    x the time in s and y the temperature rise. The stress level is the key as text in % UTS, e.g. "87.5"."""
+    curves: dict[str, dict] = {}
+    for metadata, result in figures:
+        accuracy = {"x": result.normalized_x_accuracy, "y": result.normalized_y_accuracy}
+        paper_curves = curves.setdefault(metadata.paper_name, {"setup": metadata.setup, "accuracy": accuracy, "curves": {}})["curves"]
+        for stress_level, line in result.normalized_data.items():
             paper_curves[f"{stress_level:g}"] = {"n": np.arange(len(line)).tolist(), "x": line[:, 0].tolist(),
                                                  "y": line[:, 1].tolist()}
     DIGITIZATION_DIRECTORY.mkdir(parents=True, exist_ok=True)
-    with open(DIGITIZATION_DIRECTORY / "extracted_curves.json", "w") as curves_file:
+    with open(EXTRACTED_CURVES_FILE, "w") as curves_file:
         json.dump(curves, curves_file)
-    print(f"Wrote {DIGITIZATION_DIRECTORY / 'extracted_curves.json'}.")
-
-
-def save_statistics(figures: list[FigureResult]) -> None:
-    """Join the statistics of all figures into one table and write it."""
-    statistics = pd.concat([figure.statistics for figure in figures], ignore_index=True)
-    DIGITIZATION_DIRECTORY.mkdir(parents=True, exist_ok=True)
-    statistics.to_csv(DIGITIZATION_DIRECTORY / "statistics.csv", index=False, float_format="%.4g")
-    print(statistics.to_string(index=False, float_format=lambda value: f"{value:.3g}"))
-    print(f"\nDone writing {DIGITIZATION_DIRECTORY / 'statistics.csv'}.")
+    logger.info(f"Wrote {EXTRACTED_CURVES_FILE}.")
