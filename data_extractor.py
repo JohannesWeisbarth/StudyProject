@@ -13,7 +13,7 @@ import pymupdf
 
 from evaluate_extraction import compute_statistics
 from extract_raster_plots import extract_jia2023_fig14
-from extract_vector_plots import extract_huang2019_fig10, extract_huang2020_fig7 #, extract_montesano2013_fig6
+from extract_vector_plots import extract_huang2019_fig10, extract_huang2020_fig7, extract_montesano2013_fig6
 from extraction_common import ExtractionResult, FigureResult
 from save_results import save_curves, save_figure, save_statistics
 from normalize_data import normalize_curves, x_to_cycles
@@ -79,7 +79,7 @@ def main() -> None:
     # The frequencies in the papers:
     # - 10 Hz in Montesano2013, however plot uses cycles.
     # - 5 Hz in Huang2019, Huang2020 and Jia2023.
-    figures = [#extract_figure("Montesano2013_CS", 6, extract_montesano2013_fig6, frequency_hz=None, y_is_absolute=True),
+    figures = [extract_figure("Montesano2013_CS", 6, extract_montesano2013_fig6, frequency_hz=None, y_is_absolute=True),
                extract_figure("Huang2019_IJF", 10, extract_huang2019_fig10, frequency_hz=None, y_is_absolute=False),
                extract_figure("Huang2020_EFM", 7, extract_huang2020_fig7, frequency_hz=5.0, y_is_absolute=False),
                extract_figure("Jia2023", 14, extract_jia2023_fig14, frequency_hz=None, y_is_absolute=False)]
