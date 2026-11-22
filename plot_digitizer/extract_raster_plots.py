@@ -39,6 +39,13 @@ MAX_STEP = 3                 # px a curve may move vertically per column beyond 
 GAP_SLOPE = 0.5              # px of extra vertical movement allowed per hidden column
 JUMP_COST = 0.2              # track score lost per px of vertical jump
 GAP_COST = 0.1               # track score lost per hidden column; low, so short visible pieces of a mostly hidden curve still connect
+# Dolbachinn and Najd show figures of a whole step test: one red temperature line over the time, the blocks are marked by grey load bars.
+GREY_SATURATION = 20         # max difference between the colour channels of a grey pixel
+LIGHT_THRESHOLD = 235        # all colour channels above this count as white
+MIN_LOAD_PIXELS = 25         # min grey pixels in a pixel column of a load bar
+MIN_BLOCK_COLUMNS = 20       # min pixel columns of a block
+TICK_LENGTH = 6              # px right of the temperature axis in which its tick marks are searched
+LINE_JUMP = 40               # max px a line moves vertically per pixel column where it is hidden
 
 
 def normalize_minus(text: str) -> str:
@@ -152,7 +159,11 @@ def read_labels_by_projection(pixels: np.ndarray, frame: tuple[int, int, int, in
     x_left, x_right, y_top, y_bottom = frame
     ink = pixels.min(axis=2) < LABEL_INK_THRESHOLD
     if axis == "x":
-        band = (slice(y_bottom + LABEL_GAP, y_bottom + LABEL_GAP + LABEL_BAND), slice(x_left - 20, x_right + 21))
+        # Below the axis, the first rows with ink are the axis and its tick marks, the next rows are the labels.
+        row_runs = dark_runs(ink[y_bottom:, x_left:x_right + 1].any(axis=1), max_gap=1)
+        if len(row_runs) < 2:
+            return [], []
+        band = (slice(y_bottom + row_runs[1][0] - 3, y_bottom + row_runs[1][1] + 4), slice(x_left - 20, x_right + 21))
         runs = dark_runs(ink[band].any(axis=0), max_gap=8)
         offset = x_left - 20
     else:
@@ -332,3 +343,157 @@ def extract_jia2023_fig14(document: pymupdf.Document, page: pymupdf.Page, captio
     pixel_accuracy = 2.2
     return ExtractedFigure(lines, pixels, PixelCalibration(x_slope, x_intercept, y_slope, y_intercept), line_colors,
                             x_accuracy=pixel_accuracy * abs(x_slope), y_accuracy=pixel_accuracy * abs(y_slope))
+
+
+def is_red(pixels: np.ndarray) -> np.ndarray:
+    """Boolean mask over the image: True for red pixels."""
+    channels = pixels.astype(int)
+    return (channels[:, :, 0] > 200) & (channels[:, :, 1] < 100) & (channels[:, :, 2] < 100)
+
+
+def find_step_test_frame(pixels: np.ndarray) -> tuple[int, int, int, int]:
+    """Axes frame of a step test figure -> (x_left, x_right, y_top, y_bottom). The black time axis at the bottom gives
+    the left and right end, the red temperature axis at its right end gives the top."""
+    dark = pixels.max(axis=2) < DARK_THRESHOLD
+    height = dark.shape[0]
+    y_bottom = height // 2 + int(np.argmax(dark.sum(axis=1)[height // 2:]))
+    x_left, x_right = longest_run(dark[y_bottom])
+    y_top, _ = longest_run(is_red(pixels)[:, x_right])
+    logger.info(f"Plot frame (px): x {x_left}..{x_right}, y {y_top}..{y_bottom}")
+    return x_left, x_right, y_top, y_bottom
+
+
+def calibrate_temperature_axis(red: np.ndarray, frame: tuple[int, int, int, int],
+                               tick_values: list[float]) -> tuple[float, float]:
+    """Fit pixel row -> temperature from the tick marks on the right of the red temperature axis -> (slope, intercept).
+    The tick values, from bottom to top, are read from the figure. OCR misses most of the single digit labels."""
+    _, x_right, y_top, y_bottom = frame
+    is_tick = red[y_top - 2:y_bottom + 3, x_right + 2:x_right + 2 + TICK_LENGTH].sum(axis=1) >= TICK_LENGTH - 1
+    tick_rows = [y_top - 2 + (start + end) / 2 for start, end in dark_runs(is_tick, max_gap=1)]
+    if len(tick_rows) != len(tick_values):
+        raise ExtractionError(f"Found {len(tick_rows)} tick marks on the temperature axis, expected {len(tick_values)}.")
+    # The rows grow downwards, the values upwards.
+    return fit_axis(tick_rows[::-1], tick_values, "temperature")
+
+
+def trace_single_line(mask: np.ndarray) -> np.ndarray:
+    """The only line of a colour, one point per pixel column -> (column, row) array.
+
+    The point is the centre of the run of pixels in the column, so a steep part of the line gives the middle of its
+    vertical run. The line continues with the run closest to the previous run. A run that is further away than
+    LINE_JUMP px per column is not the line, for example the legend in a column where other lines hide the line. Columns
+    without the line are skipped."""
+    points: list[tuple[int, float]] = []
+    previous_column, previous_start, previous_end = -1, 0, 0
+    for column in np.where(mask.any(axis=0))[0]:
+        runs = np.array(dark_runs(mask[:, column], max_gap=2))
+        if points:
+            # The vertical distance between the runs, 0 if they overlap.
+            distances = np.maximum(0, np.maximum(runs[:, 0] - previous_end, previous_start - runs[:, 1]))
+            closest = int(np.argmin(distances))
+            if distances[closest] > LINE_JUMP * (column - previous_column):
+                continue
+        else:
+            closest = 0
+        previous_column, (previous_start, previous_end) = column, runs[closest]
+        points.append((int(column), (previous_start + previous_end) / 2))
+    return np.array(points)
+
+
+def find_load_blocks(pixels: np.ndarray, frame: tuple[int, int, int, int], text_boxes: list,
+                     line_gap: int) -> list[tuple[int, int]]:
+    """First and last pixel column of every block, from the grey load bars -> list of (start, end), in time order.
+
+    The columns with grey load lines that are at most line_gap columns apart form a block. The thin load ramps before
+    and after a block are cut off: a column of the block holds at least half the grey of the fullest column."""
+    x_left, x_right, y_top, y_bottom = frame
+    channels = pixels.astype(int)
+    grey = ((channels.max(axis=2) - channels.min(axis=2) < GREY_SATURATION) & (channels.max(axis=2) > DARK_THRESHOLD)
+            & (channels.max(axis=2) < LIGHT_THRESHOLD))
+    # The edges of text are grey, too.
+    for _, x0, y0, x1, y1 in text_boxes:
+        grey[max(int(y0) - 2, 0):int(y1) + 3, max(int(x0) - 2, 0):int(x1) + 3] = False
+    first_column = x_left + FRAME_MARGIN
+    counts = grey[y_top:y_bottom - FRAME_MARGIN, first_column:x_right - 2 * FRAME_MARGIN].sum(axis=0)
+    blocks = []
+    for start, end in dark_runs(counts >= MIN_LOAD_PIXELS, line_gap):
+        full = np.where(counts[start:end + 1] >= counts[start:end + 1].max() / 2)[0]
+        if full[-1] - full[0] >= MIN_BLOCK_COLUMNS:
+            blocks.append((first_column + start + int(full[0]), first_column + start + int(full[-1])))
+    return blocks
+
+
+def extract_step_test(document: pymupdf.Document, page: pymupdf.Page, caption_rect: pymupdf.Rect,
+                      tick_values: list[float], stresses: list[float], line_gap: int,
+                      block_length: float) -> ExtractedFigure:
+    """Digitize a figure that shows a whole step test: the temperature as one red line over the time, the load as grey
+    bars, one per block. The figure is an image. The red line is cut into one curve per block, its x values stay the
+    time of the figure, the start of every block is returned with it.
+
+    tick_values: the values of the ticks on the temperature axis, from bottom to top.
+    stresses: the σ_max of the blocks in time order, from the text of the paper.
+    line_gap: the largest gap in pixel columns between the grey load lines of one block.
+    block_length: the time of the cycles of one block in the unit of the time axis. The grey bars end a few pixels after
+    the cycles, when the line already drops, so a block ends at the end of its bar or after block_length."""
+    xref, _ = find_figure_image(page, caption_rect)
+    pixels = load_image_pixels(document, xref)
+    logger.info(f"Figure image: xref {xref}, {pixels.shape[1]}x{pixels.shape[0]} px")
+
+    text_boxes = read_text(pixels)
+    frame = find_step_test_frame(pixels)
+    # Text detection misses most of the time labels, and two labels next to each other would give a poor fit. Every
+    # label is recognised on its own instead.
+    label_positions, label_values = read_labels_by_projection(pixels, frame, "x")
+    if len(label_positions) < 2:
+        raise ExtractionError(f"Recognised {len(label_positions)} time labels, at least 2 are needed.")
+    x_slope, x_intercept = fit_axis(label_positions, label_values, "x")
+    red = is_red(pixels)
+    y_slope, y_intercept = calibrate_temperature_axis(red, frame, tick_values)
+
+    blocks = find_load_blocks(pixels, frame, [box for box in text_boxes if not NUMBER_PATTERN.match(box[0])], line_gap)
+    if len(blocks) != len(stresses):
+        raise ExtractionError(f"Found {len(blocks)} load blocks, expected {len(stresses)}: {blocks}")
+
+    # The red line inside the frame, without the red temperature axis on its right.
+    x_left, x_right, y_top, y_bottom = frame
+    inside = np.zeros_like(red)
+    inside[y_top:y_bottom - FRAME_MARGIN, x_left + FRAME_MARGIN:x_right - 2 * FRAME_MARGIN] = True
+    curve = trace_single_line(red & inside)
+
+    lines: dict[float, np.ndarray] = {}
+    block_starts: dict[float, float] = {}
+    for stress, (start, end) in zip(stresses, blocks):
+        end = min(end, start + block_length / x_slope)
+        in_block = (curve[:, 0] >= start) & (curve[:, 0] <= end)
+        lines[stress] = np.column_stack([x_slope * curve[in_block, 0] + x_intercept, y_slope * curve[in_block, 1] + y_intercept])
+        block_starts[stress] = x_slope * start + x_intercept
+    # The accuracy is 2 px: the ticks give the calibration to 1 px, the centre of a line that is 2 to 4 px thick is good to
+    # 1 to 2 px, and the start of a block is good to 1 px.
+    pixel_accuracy = 2.0
+    return ExtractedFigure(lines, pixels, PixelCalibration(x_slope, x_intercept, y_slope, y_intercept), None,
+                           x_accuracy=pixel_accuracy * abs(x_slope), y_accuracy=pixel_accuracy * abs(y_slope),
+                           block_starts=block_starts)
+
+
+def extract_najd2022_fig13(document: pymupdf.Document, page: pymupdf.Page, caption_rect: pymupdf.Rect) -> ExtractedFigure:
+    """Digitize Fig. 13 of Najd2022: the temperature rise in °C over the time in h of a whole step test on a pristine
+    specimen. σ_max starts at 50 MPa and grows by 10 MPa per block. A block is 5000 cycles at 2 Hz. The specimen fails in
+    the 13th block."""
+    return extract_step_test(document, page, caption_rect, tick_values=list(range(11)),
+                             stresses=[50.0 + 10.0 * block for block in range(13)], line_gap=10, block_length=2500.0 / 3600.0)
+
+
+def extract_najd2022_fig12(document: pymupdf.Document, page: pymupdf.Page, caption_rect: pymupdf.Rect) -> ExtractedFigure:
+    """Digitize Fig. 12 of Najd2022: like Fig. 13, on a smart specimen with embedded PVDF transducers. The blue
+    capacitance line is not extracted."""
+    return extract_step_test(document, page, caption_rect, tick_values=list(range(9)),
+                             stresses=[50.0 + 10.0 * block for block in range(13)], line_gap=10, block_length=2500.0 / 3600.0)
+
+
+def extract_dolbachin2025_fig7(document: pymupdf.Document, page: pymupdf.Page, caption_rect: pymupdf.Rect) -> ExtractedFigure:
+    """Digitize Fig. 7 of Dolbachin2025: the temperature rise in °C over the time in s of a whole step test in four-point
+    bending. F_max starts at 187.5 N and grows by 187.5 N per block, the outer fibre stress σ = F L / (b h²) with
+    L = 150 mm, b = 50 mm, h = 5 mm is 22.5 MPa per block. A block is 5000 cycles at 5 Hz. The figure shows the first 10
+    blocks, the specimen fails in the 11th. The blue capacitance line is not extracted."""
+    return extract_step_test(document, page, caption_rect, tick_values=list(range(6)),
+                             stresses=[22.5 * block for block in range(1, 11)], line_gap=6, block_length=1000.0)

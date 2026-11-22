@@ -16,16 +16,19 @@ FIBRE_MATERIALS = {"carbon": 0.0, "glass": 1.0}
 
 
 def setup_features(setup: dict) -> torch.Tensor:
-    """Maps the setup of a paper to a tensor of shape (3,), which can then be given to the network.
+    """Maps the setup of a paper to a tensor of shape (4,), which can then be given to the network.
     The following is given to the model:
     - the fibre material, 0 for carbon and 1 for glass
     - the fiber contribution. This depends on the "angle of attack" of the forces on the material.
       E.g. 1 for 0°, 0.25 for ±45°, 0 for 90°
     - the volume to surface ratio in mm
+    - the logarithm of the loading frequency in Hz. The heat dissipated per second grows with the frequency, so
+      log delta_T_stab, which the network predicts, is expected to grow linearly with log f.
     """
     angles = torch.tensor(setup["angles_of_attack_deg"], dtype=torch.float64).deg2rad()
     return torch.tensor([FIBRE_MATERIALS[setup["fibre_material"]], float((angles.cos() ** 4).mean()),
-                         setup["volume_to_surface_mm"]], dtype=torch.float64)
+                         setup["volume_to_surface_mm"], float(torch.log(torch.tensor(setup["frequency_hz"])))],
+                        dtype=torch.float64)
 
 
 class ParameterizedExponential(torch.nn.Module):
@@ -35,7 +38,7 @@ class ParameterizedExponential(torch.nn.Module):
             self,
             initial_log_delta_T_stab: float,
             initial_log_tau: float,
-            n_setup_features: int = 3,
+            n_setup_features: int = 4,
             hidden_units: int = 16
         ) -> None:
         super().__init__()

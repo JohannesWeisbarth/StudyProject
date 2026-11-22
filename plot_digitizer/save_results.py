@@ -37,13 +37,14 @@ def save_original_plot(
 def save_extracted_plot(
         extracted_data: dict[float, np.ndarray],
         plot_save_path: str | Path,
+        stress_unit: str,
         line_colors: dict[float, np.ndarray] | None = None
     ) -> None:
     """Save the extracted points as an image, for visualization. Line colors from the original plot are kept, if it had any."""
     figure, data_axes = plt.subplots(figsize=(7, 5))
     for stress_level, line in extracted_data.items():
         color = line_colors.get(stress_level) if line_colors else None
-        data_axes.plot(line[:, 0], line[:, 1], lw=0.8, label=f"{stress_level:g}% UTS", color=color)
+        data_axes.plot(line[:, 0], line[:, 1], lw=0.8, label=f"{stress_level:g} {stress_unit}", color=color)
     data_axes.legend(fontsize=6, ncol=2)
     figure.savefig(plot_save_path, dpi=150)
     plt.close(figure)
@@ -87,7 +88,7 @@ def save_figure(metadata: FigureMetadata, result: ExtractionResult) -> None:
 
     lines_to_frame(result.extracted_data).to_csv(f"{plot_path}_data.csv", index=False)
     # The result of the exttraction and the original plot are stored for comparison.
-    save_extracted_plot(result.extracted_data, f"{plot_path}_extracted.png", result.line_colors)
+    save_extracted_plot(result.extracted_data, f"{plot_path}_extracted.png", metadata.stress_unit, result.line_colors)
     save_original_plot(result.original_plot, f"{plot_path}_original.png")
     save_overlay_plot(result.extracted_data, result.original_plot, result.calibration_data,
                       f"{plot_path}_overlay.png")
@@ -96,14 +97,17 @@ def save_figure(metadata: FigureMetadata, result: ExtractionResult) -> None:
 
 def save_curves(figures: list[tuple[FigureMetadata, ExtractionResult]]) -> None:
     """Write the normalized curves of all figures to results/digitization/extracted_curves.json, nested as
-    {paper: {"setup": {parameter: value}, "accuracy": {"x": ..., "y": ...}, "curves": {stress level: {n, x, y}}}}.
-    The setup is the test setup of the paper, from its FigureMetadata. The accuracy is the uncertainty of the x values
-    in s and of the y values in K, it comes from the calibration of the extraction. For every curve n is the number of the point,
-    x the time in s and y the temperature rise. The stress level is the key as text in % UTS, e.g. "87.5"."""
+    {paper: {"setup": {parameter: value}, "stress_unit": ..., "accuracy": {"x": ..., "y": ...}, "curves": {stress level: {n, x, y}}}}.
+    The paper is the dataset name of the figure, or its paper name. The setup is the test setup of the paper, from its
+    FigureMetadata. The accuracy is the uncertainty of the x values in s and of the y values in K, it comes from the
+    calibration of the extraction. For every curve n is the number of the point, x the time in s and y the temperature
+    rise. The stress level is the key as text in the stress unit, "% UTS" or "MPa", e.g. "87.5"."""
     curves: dict[str, dict] = {}
     for metadata, result in figures:
         accuracy = {"x": result.normalized_x_accuracy, "y": result.normalized_y_accuracy}
-        paper_curves = curves.setdefault(metadata.paper_name, {"setup": metadata.setup, "accuracy": accuracy, "curves": {}})["curves"]
+        paper_curves = curves.setdefault(metadata.dataset_name or metadata.paper_name,
+                                         {"setup": metadata.setup, "stress_unit": metadata.stress_unit,
+                                          "accuracy": accuracy, "curves": {}})["curves"]
         for stress_level, line in result.normalized_data.items():
             paper_curves[f"{stress_level:g}"] = {"n": np.arange(len(line)).tolist(), "x": line[:, 0].tolist(),
                                                  "y": line[:, 1].tolist()}
