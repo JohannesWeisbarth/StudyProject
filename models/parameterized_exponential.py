@@ -52,15 +52,16 @@ class ParameterizedExponential(torch.nn.Module):
             self.output_layer.bias.copy_(torch.stack([torch.stack([guess.log_delta_T_stab for guess in guesses]).mean(),
                                                       torch.stack([guess.log_tau for guess in guesses]).mean()]))
 
-    def predict_parameters(self, batch: CurveBatch) -> tuple[torch.Tensor, torch.Tensor]:
-        """Predicts delta_T_stab in K and tau in s for every curve of the batch, each a tensor of shape (n_curves,)."""
-        features = torch.stack([setup_features(setup) for setup in batch["setup"]])
-        stress = (batch["stress_level"].double() - self.stress_mean) / self.stress_std
+    def predict_parameters(self, stress_level: torch.Tensor, setups: list[dict]) -> tuple[torch.Tensor, torch.Tensor]:
+        """Predicts delta_T_stab in K and tau in s at every stress level, a fraction of UTS, in its setup. Both are
+        tensors of the shape of stress_level, (n,). It needs no measured curve, so it also predicts between the curves."""
+        features = torch.stack([setup_features(setup) for setup in setups])
+        stress = (stress_level.double() - self.stress_mean) / self.stress_std
         inputs = torch.cat([stress[:, None], features], dim=1)
         log_delta_T_stab, log_tau = self.output_layer(torch.tanh(self.hidden_layer(inputs))).unbind(-1)
         return log_delta_T_stab.exp(), log_tau.exp()
 
     def forward(self, batch: CurveBatch) -> torch.Tensor:
         """Predicts the temperature rise in K for every curve of the batch."""
-        delta_T_stab, tau = self.predict_parameters(batch)
+        delta_T_stab, tau = self.predict_parameters(batch["stress_level"], batch["setup"])
         return exponential(batch["x"], delta_T_stab[:, None], tau[:, None])

@@ -27,7 +27,7 @@ from curve_split import split_curves
 from fit_simple_exponential import fit_simple_exponential
 from models.parameterized_exponential import ParameterizedExponential
 from models.simple_exponential import exponential
-from plots import plot_interpolation, plot_losses
+from plots import plot_interpolation, plot_learned_parameters, plot_losses
 
 logger = logging.getLogger(__name__)
 
@@ -127,9 +127,18 @@ def main() -> None:
     for paper in train.paper_names:
         plot_losses(paper, train_losses, validation_losses.get(paper, []), OUTPUT_DIRECTORY / paper / "loss.png")
         logger.info("Wrote %s.", OUTPUT_DIRECTORY / paper / "loss.png")
+        paper_train = [curve for curve in train.curves if curve["paper_name"] == paper]
+        train_stress_levels = [float(curve["stress_level"]) for curve in paper_train]
+        # The learned parameters on a fine grid from the lowest to the highest training curve of the paper.
+        grid = torch.linspace(min(train_stress_levels), max(train_stress_levels), 200, dtype=torch.float64)
+        with torch.no_grad():
+            delta_T_stab, tau = model.predict_parameters(grid, [paper_train[0]["setup"]] * len(grid))
+        plot_learned_parameters(paper, (100 * grid).tolist(), delta_T_stab.tolist(), tau.tolist(),
+                                [100 * stress_level for stress_level in train_stress_levels],
+                                OUTPUT_DIRECTORY / paper / "learned_parameters.png")
+        logger.info("Wrote %s.", OUTPUT_DIRECTORY / paper / "learned_parameters.png")
         paper_test = [curve for curve in test.curves if curve["paper_name"] == paper]
         if paper_test:
-            paper_train = [curve for curve in train.curves if curve["paper_name"] == paper]
             test_batch = collate_curves(paper_test)
             with torch.no_grad():
                 network = model(test_batch)

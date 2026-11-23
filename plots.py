@@ -75,6 +75,30 @@ def plot_heating_rate(paper: str, stress_levels: list[float], heating_rates: lis
     plt.close(figure)
 
 
+def plot_learned_parameters(paper: str, stress_levels: list[float], delta_T_stabs: list[float], taus: list[float],
+                            train_stress_levels: list[float], plot_path: Path) -> None:
+    """The delta_T_stab and tau learned by the network over the stress level in % UTS, on a grid much finer than the
+    curves. The stress levels of the training curves are ticks at the bottom: a bend between two ticks is not backed by a
+    training curve and hints at overfitting."""
+    figure, (plateau_axis, tau_axis) = plt.subplots(2, 1, figsize=(6, 6), sharex=True)
+    plateau_axis.plot(stress_levels, delta_T_stabs, color="tab:red")
+    plateau_axis.set_ylabel("ΔT_stab [K]")
+    plateau_axis.set_title(f"{paper}: learned parameters")
+    tau_axis.plot(stress_levels, taus, color="tab:blue")
+    tau_axis.set_ylabel("τ [s]")
+    tau_axis.set_xlabel("Stress level [% UTS]")
+    for axis in (plateau_axis, tau_axis):
+        # The ticks sit at the bottom of the axis whatever its y scale.
+        axis.plot(train_stress_levels, [0.0] * len(train_stress_levels), "|", color="tab:orange", markersize=20,
+                  markeredgewidth=2, transform=axis.get_xaxis_transform(), label="training curve")
+        axis.grid(True, alpha=0.3)
+    plateau_axis.legend(fontsize=8)
+    figure.tight_layout()
+    plot_path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(plot_path, dpi=150)
+    plt.close(figure)
+
+
 def plot_losses(paper: str, train_losses: list[float], validation_losses: list[float], plot_path: Path) -> None:
     """The training loss and the validation loss on the held-out curves over the optimizer steps, in one plot."""
     figure, axis = plt.subplots(figsize=(7, 4))
