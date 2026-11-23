@@ -58,7 +58,8 @@ class FigureMetadata(NamedTuple):
     x_unit: str                                     # the unit of the x axis: "s", "h" or "cycles"
     y_is_absolute: bool                             # the y axis is the absolute temperature (True) or the temperature rise (False)
     setup: dict[str, float | str | list[float] | None]  # the test setup of the paper, None where the paper does not state it
-    stress_unit: str = "% UTS"                      # the unit of the stress levels: "% UTS" or "MPa" (σ_max)
+    stress_unit: str                                # the unit of the stress levels: "% UTS" or "MPa" (σ_max)
+    uts: float                                      # the UTS in stress_unit, which a stress level is divided by
     dataset_name: str | None = None                 # the name of the curves in extracted_curves.json, if not paper_name
 
 

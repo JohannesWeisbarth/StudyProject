@@ -2,7 +2,7 @@
 """Train the parameterized exponential on the temperature curves and plot its training loss, its validation loss on the
 held-out curves and its predictions of the held-out curves.
 
-    python train.py --papers Huang2020_EFM --n-held-out 2 --hold-out-mode interior --sampler interpolation
+    python train.py --papers Huang2020_EFM --n-held-out 2 --hold-out-mode interior --mode curve_interpolation
 
 The parameterized exponential learns delta_T_stab and tau as functions of the stress level and the setup. One model is trained
 on the curves of all selected papers. A held-out curve is predicted at its stress level and setup.
@@ -34,8 +34,10 @@ logger = logging.getLogger(__name__)
 # All results are written to this directory, in the directory the script is started in, one folder per paper.
 # The simple exponential of fit_simple_exponential.py writes to the folder simple_exponential next to it.
 OUTPUT_DIRECTORY = Path("results") / "training" / "parameterized_exponential"
-# The samplers that --sampler chooses from, by name.
-SAMPLERS = {"curves": RandomCurveSampler, "interpolation": InterpolationSampler}
+# The samplers that --mode chooses from, by task.
+SAMPLERS = {"curve_interpolation": InterpolationSampler, "plot_prediction": RandomCurveSampler}
+# The seed of the network initialization, the batch order and the choice of the held-out curves.
+SEED = 0
 
 
 def relative_mse(prediction: torch.Tensor, batch: CurveBatch) -> torch.Tensor:
@@ -70,7 +72,7 @@ def train_model(train: CurveDataset, test: CurveDataset, args: argparse.Namespac
     guesses = [SimpleExponential(curve["x"], curve["y"]) for curve in train.curves]
     model = ParameterizedExponential(initial_log_delta_T_stab=sum(guess.log_delta_T_stab.item() for guess in guesses) / len(guesses),
                                      initial_log_tau=sum(guess.log_tau.item() for guess in guesses) / len(guesses))
-    dataloader = DataLoader(train, batch_sampler=SAMPLERS[args.sampler](train, batch_size=args.batch_size, seed=args.seed),
+    dataloader = DataLoader(train, batch_sampler=SAMPLERS[args.mode](train, batch_size=args.batch_size, seed=SEED),
                         collate_fn=collate_curves)
     validation_batches = {paper: collate_curves([curve for curve in test.curves if curve["paper_name"] == paper])
                           for paper in test.paper_names}
@@ -105,12 +107,11 @@ def main() -> None:
     parser.add_argument("--n-held-out", type=int, default=0, help="number of curves held out of every selected paper (default: 0)")
     parser.add_argument("--hold-out-mode", choices=["random", "interior"], default="random",
                         help="sets which curves are held out. Options are: randomly selected, interior (not the outmost curves)")
-    parser.add_argument("--sampler", choices=sorted(SAMPLERS), default="curves", help="how training batches are formed")
+    parser.add_argument("--mode", choices=["curve_interpolation", "plot_prediction"], default="curve_interpolation", help="how training batches are formed")
     parser.add_argument("--batch-size", type=int, default=8, help="number of curves per batch, for both samplers")
-    parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
-    torch.manual_seed(args.seed)
+    torch.manual_seed(SEED)
     dataset = CurveDataset(papers=args.papers)
     # A paper with a setup value None does not provide complete input. It is skipped.
     skipped_papers = sorted({curve["paper_name"] for curve in dataset.curves if None in curve["setup"].values()})
@@ -118,7 +119,7 @@ def main() -> None:
         logger.info("Skipped for missing setup values: %s", skipped_papers)
         dataset = CurveDataset.from_curves([curve for curve in dataset.curves if curve["paper_name"] not in skipped_papers])
     if args.n_held_out > 0:
-        split = split_curves(dataset, args.n_held_out, args.hold_out_mode, args.seed)
+        split = split_curves(dataset, args.n_held_out, args.hold_out_mode, SEED)
         train, test = split.train, split.test
     else:
         train, test = dataset, CurveDataset.from_curves([])

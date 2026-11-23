@@ -1,5 +1,4 @@
-"""The plots of the fitted parameters over the stress level: the temperature plateau, the time constant and the heating rate,
-the plot of the training and validation loss and the plot of the predicted held-out curves."""
+"""The plots of the learned/fitted parameters over the stress level."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -19,7 +18,7 @@ INITIAL_TIME = 40.0
 
 
 def plot_temperature_plateau(paper: str, stress_levels: list[float], delta_T_stabs: list[float], plot_path: Path) -> None:
-    """The fitted temperature plateau delta_T_stab over the stress level in % UTS."""
+    """Plots temperature plateau over stress level in % UTS."""
     figure, axis = plt.subplots(figsize=(6, 4))
     axis.plot(stress_levels, delta_T_stabs, "o-", color="tab:red")
     axis.set_xlabel("Stress level [% UTS]")

@@ -97,16 +97,16 @@ def save_figure(metadata: FigureMetadata, result: ExtractionResult) -> None:
 
 def save_curves(figures: list[tuple[FigureMetadata, ExtractionResult]]) -> None:
     """Write the normalized curves of all figures to results/digitization/extracted_curves.json, nested as
-    {paper: {"setup": {parameter: value}, "stress_unit": ..., "accuracy": {"x": ..., "y": ...}, "curves": {stress level: {n, x, y}}}}.
+    {paper: {"setup": {parameter: value}, "stress_unit": ..., "uts": ..., "accuracy": {"x": ..., "y": ...}, "curves": {stress level: {n, x, y}}}}.
     The paper is the dataset name of the figure, or its paper name. The setup is the test setup of the paper, from its
-    FigureMetadata. The accuracy is the uncertainty of the x values in s and of the y values in K, it comes from the
-    calibration of the extraction. For every curve n is the number of the point, x the time in s and y the temperature
+    FigureMetadata, as are the stress unit and the UTS in it. The accuracy is the uncertainty of the x values in s and
+    of the y values in K, it comes from the calibration of the extraction. For every curve n is the number of the point, x the time in s and y the temperature
     rise. The stress level is the key as text in the stress unit, "% UTS" or "MPa", e.g. "87.5"."""
     curves: dict[str, dict] = {}
     for metadata, result in figures:
         accuracy = {"x": result.normalized_x_accuracy, "y": result.normalized_y_accuracy}
         paper_curves = curves.setdefault(metadata.dataset_name or metadata.paper_name,
-                                         {"setup": metadata.setup, "stress_unit": metadata.stress_unit,
+                                         {"setup": metadata.setup, "stress_unit": metadata.stress_unit, "uts": metadata.uts,
                                           "accuracy": accuracy, "curves": {}})["curves"]
         for stress_level, line in result.normalized_data.items():
             paper_curves[f"{stress_level:g}"] = {"n": np.arange(len(line)).tolist(), "x": line[:, 0].tolist(),

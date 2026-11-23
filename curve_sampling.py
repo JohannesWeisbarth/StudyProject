@@ -18,7 +18,8 @@ from curve_dataset import Curve, CurveDataset
 
 
 class RandomCurveSampler:
-    """Random batches of batch_size many curves from any paper. The last batch of an epoch may be smaller."""
+    """Samples random batches of batch_size many curves from any paper.
+    The last batch of an epoch may be smaller."""
 
     def __init__(self, dataset: CurveDataset, batch_size: int = 8, seed: int = 0) -> None:
         self.size, self.batch_size = len(dataset), batch_size
@@ -65,7 +66,9 @@ class InterpolationSampler:
 
 
 class CurveBatch(TypedDict):
-    """The curves of a batch, zero-padded to the longest one."""
+    """Represents the curves of a batch. Curves differ in their length, thus they are zero-padded
+    to the longest curve in the batch. A mask is provided that is "true" for real points and
+    "false" for padding points. It is used to exclude the padding points in training."""
     # The time in seconds, a tensor of shape (n_curves, n_points of the longest curve).
     x: torch.Tensor
     # The temperature rise in K, a tensor of the same shape as x.
