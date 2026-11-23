@@ -26,7 +26,7 @@ from curve_sampling import CurveBatch, InterpolationSampler, RandomCurveSampler,
 from curve_split import split_curves
 from fit_simple_exponential import fit_simple_exponential
 from models.parameterized_exponential import ParameterizedExponential
-from models.simple_exponential import SimpleExponential, exponential
+from models.simple_exponential import exponential
 from plots import plot_interpolation, plot_losses
 
 logger = logging.getLogger(__name__)
@@ -68,10 +68,7 @@ def train_model(train: CurveDataset, test: CurveDataset, args: argparse.Namespac
                 ) -> tuple[ParameterizedExponential, list[float], dict[str, list[float]]]:
     """Trains one model with Adam on batches of the training curves. Returns the model, its training loss after every step and,
     for every paper with held-out curves, the validation loss on them after every step."""
-    # The network starts at the mean of the starting values of the single-curve fits.
-    guesses = [SimpleExponential(curve["x"], curve["y"]) for curve in train.curves]
-    model = ParameterizedExponential(initial_log_delta_T_stab=sum(guess.log_delta_T_stab.item() for guess in guesses) / len(guesses),
-                                     initial_log_tau=sum(guess.log_tau.item() for guess in guesses) / len(guesses))
+    model = ParameterizedExponential(train.curves)
     dataloader = DataLoader(train, batch_sampler=SAMPLERS[args.mode](train, batch_size=args.batch_size, seed=SEED),
                         collate_fn=collate_curves)
     validation_batches = {paper: collate_curves([curve for curve in test.curves if curve["paper_name"] == paper])
@@ -107,7 +104,7 @@ def main() -> None:
     parser.add_argument("--n-held-out", type=int, default=0, help="number of curves held out of every selected paper (default: 0)")
     parser.add_argument("--hold-out-mode", choices=["random", "interior"], default="random",
                         help="sets which curves are held out. Options are: randomly selected, interior (not the outmost curves)")
-    parser.add_argument("--mode", choices=["curve_interpolation", "plot_prediction"], default="curve_interpolation", help="how training batches are formed")
+    parser.add_argument("--mode", choices=sorted(SAMPLERS.keys()), default="curve_interpolation", help="how training batches are formed")
     parser.add_argument("--batch-size", type=int, default=8, help="number of curves per batch, for both samplers")
     args = parser.parse_args()
 

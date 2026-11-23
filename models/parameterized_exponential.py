@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import torch
 
+from curve_dataset import Curve
 from curve_sampling import CurveBatch
-from models.simple_exponential import exponential
+from models.simple_exponential import SimpleExponential, exponential
 
 # The fibre materials as numbers for the network.
 FIBRE_MATERIALS = {"carbon": 0.0, "glass": 1.0}
@@ -33,24 +34,33 @@ def setup_features(setup: dict) -> torch.Tensor:
 
 class ParameterizedExponential(torch.nn.Module):
     """Parameterized exponential function."""
+    stress_mean: torch.Tensor
+    stress_std: torch.Tensor
 
-    def __init__(
-            self,
-            initial_log_delta_T_stab: float,
-            initial_log_tau: float,
-            n_setup_features: int = 4,
-            hidden_units: int = 16
-        ) -> None:
+    def __init__(self, train_curves: list[Curve], n_setup_features: int = 4, hidden_units: int = 16) -> None:
         super().__init__()
+        # The stress level is standardized with the mean and standard deviation of the training curves. Its raw range of
+        # about 0.3 to 0.9 barely changes the hidden units at their initial weights, so the network starts almost linear in it.
+        stress_levels = torch.stack([curve["stress_level"] for curve in train_curves]).double()
+        self.register_buffer("stress_mean", stress_levels.mean())
+        self.register_buffer("stress_std", stress_levels.std())
         self.hidden_layer = torch.nn.Linear(1 + n_setup_features, hidden_units, dtype=torch.float64)
         self.output_layer = torch.nn.Linear(hidden_units, 2, dtype=torch.float64)
-        # The network starts close to the given log delta_T_stab and log tau for every input.
+        # The network starts at the mean of the starting values of the single-curve fits, for every input.
+        guesses = [SimpleExponential(curve["x"], curve["y"]) for curve in train_curves]
         with torch.no_grad():
-            self.output_layer.bias.copy_(torch.tensor([initial_log_delta_T_stab, initial_log_tau], dtype=torch.float64))
+            self.output_layer.bias.copy_(torch.stack([torch.stack([guess.log_delta_T_stab for guess in guesses]).mean(),
+                                                      torch.stack([guess.log_tau for guess in guesses]).mean()]))
+
+    def predict_parameters(self, batch: CurveBatch) -> tuple[torch.Tensor, torch.Tensor]:
+        """Predicts delta_T_stab in K and tau in s for every curve of the batch, each a tensor of shape (n_curves,)."""
+        features = torch.stack([setup_features(setup) for setup in batch["setup"]])
+        stress = (batch["stress_level"].double() - self.stress_mean) / self.stress_std
+        inputs = torch.cat([stress[:, None], features], dim=1)
+        log_delta_T_stab, log_tau = self.output_layer(torch.tanh(self.hidden_layer(inputs))).unbind(-1)
+        return log_delta_T_stab.exp(), log_tau.exp()
 
     def forward(self, batch: CurveBatch) -> torch.Tensor:
-        """The temperature rise in K of every curve of the batch, of the same shape as batch["x"]."""
-        features = torch.stack([setup_features(setup) for setup in batch["setup"]])
-        inputs = torch.cat([batch["stress_level"].double()[:, None], features], dim=1)
-        log_delta_T_stab, log_tau = self.output_layer(torch.tanh(self.hidden_layer(inputs))).unbind(-1)
-        return exponential(batch["x"], log_delta_T_stab.exp()[:, None], log_tau.exp()[:, None])
+        """Predicts the temperature rise in K for every curve of the batch."""
+        delta_T_stab, tau = self.predict_parameters(batch)
+        return exponential(batch["x"], delta_T_stab[:, None], tau[:, None])
