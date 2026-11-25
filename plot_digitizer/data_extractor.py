@@ -78,7 +78,7 @@ def main() -> None:
     # - the test setup of the paper, None where the paper does not state it:
     #   - frequency_hz: the loading frequency, which also converts a cycle axis to s
     #   - fibre_material
-    #   - angles_of_attack_deg: the angle between the load and the fibres of every ply, in stacking order
+    #   - ply_angles_deg: the angle between the load and the fibres of every ply, in stacking order
     #   - volume_to_surface_mm: the volume of the gauge section divided by its lateral surface, w·t / (2·(w + t)) for the
     #     width w and thickness t
     # - the unit of the stress levels, % UTS or σ_max in MPa.
@@ -86,27 +86,27 @@ def main() -> None:
     #   stress at which their step test failed stands in for it.
     # Montesano2013 does not state the braid angle or the thickness.
     montesano2013 = FigureMetadata("Montesano2013_CS", 6, x_unit="cycles", y_is_absolute=True,
-                                   setup={"frequency_hz": 10.0, "fibre_material": "carbon", "angles_of_attack_deg": None,
+                                   setup={"frequency_hz": 10.0, "fibre_material": "carbon", "ply_angles_deg": None,
                                           "volume_to_surface_mm": None},
                                    stress_unit="% UTS", uts=100.0)
     huang2019 = FigureMetadata("Huang2019_IJF", 10, x_unit="cycles", y_is_absolute=False,
-                               setup={"frequency_hz": 5.0, "fibre_material": "carbon", "angles_of_attack_deg": [0.0] * 8,
+                               setup={"frequency_hz": 5.0, "fibre_material": "carbon", "ply_angles_deg": [0.0] * 8,
                                       "volume_to_surface_mm": 15.0 * 1.04 / (2 * (15.0 + 1.04))},
                                stress_unit="% UTS", uts=100.0)
     # The thickness of Huang2020 is 16 plies of 0.128 mm.
     huang2020 = FigureMetadata("Huang2020_EFM", 7, x_unit="s", y_is_absolute=False,
-                               setup={"frequency_hz": 5.0, "fibre_material": "carbon", "angles_of_attack_deg": [45.0, -45.0] * 8,
+                               setup={"frequency_hz": 5.0, "fibre_material": "carbon", "ply_angles_deg": [45.0, -45.0] * 8,
                                       "volume_to_surface_mm": 25.0 * 2.048 / (2 * (25.0 + 2.048))},
                                stress_unit="% UTS", uts=100.0)
     jia2023 = FigureMetadata("Jia2023", 14, x_unit="cycles", y_is_absolute=False,
                              setup={"frequency_hz": 5.0, "fibre_material": "carbon",
-                                    "angles_of_attack_deg": [0.0, 45.0, 90.0, -45.0, -45.0, 90.0, 45.0, 0.0],
+                                    "ply_angles_deg": [0.0, 45.0, 90.0, -45.0, -45.0, 90.0, 45.0, 0.0],
                                     "volume_to_surface_mm": 25.0 * 1.009 / (2 * (25.0 + 1.009))},
                              stress_unit="% UTS", uts=100.0)
     # Najd2022 and Dolbachin2025 test the same 2/2 twill glass / polyester laminate of 22 plies, 5 mm thick. Every ply
     # has fibres along and across the load. Najd's specimens failed in block 13 (170 MPa), Dolbachin's in block 11 at
     # 2063 N (248 MPa).
-    najd2022_setup = {"frequency_hz": 2.0, "fibre_material": "glass", "angles_of_attack_deg": [0.0, 90.0] * 22,
+    najd2022_setup = {"frequency_hz": 2.0, "fibre_material": "glass", "ply_angles_deg": [0.0, 90.0] * 22,
                       "volume_to_surface_mm": 40.0 * 5.0 / (2 * (40.0 + 5.0))}
     najd2022 = FigureMetadata("Najd2022", 13, x_unit="h", y_is_absolute=False, setup=najd2022_setup, stress_unit="MPa",
                               uts=170.0)
@@ -115,7 +115,7 @@ def main() -> None:
                                     stress_unit="MPa", uts=170.0, dataset_name="Najd2022_smart")
     # Four-point bending: the stresses are the outer fibre stresses.
     dolbachin2025 = FigureMetadata("Dolbachin2025", 7, x_unit="s", y_is_absolute=False,
-                                   setup={"frequency_hz": 5.0, "fibre_material": "glass", "angles_of_attack_deg": [0.0, 90.0] * 22,
+                                   setup={"frequency_hz": 5.0, "fibre_material": "glass", "ply_angles_deg": [0.0, 90.0] * 22,
                                           "volume_to_surface_mm": 50.0 * 5.0 / (2 * (50.0 + 5.0))},
                                    stress_unit="MPa", uts=248.0)
 

@@ -12,22 +12,22 @@ from curve_dataset import Curve
 from curve_sampling import CurveBatch
 from models.simple_exponential import SimpleExponential, exponential
 
-# The fibre materials as numbers for the network.
-FIBRE_MATERIALS = {"carbon": 0.0, "glass": 1.0}
+# The fibre materials as one-hot vectors for the network.
+FIBRE_MATERIALS = {"carbon": [1.0, 0.0], "glass": [0.0, 1.0]}
 
 
 def setup_features(setup: dict) -> torch.Tensor:
-    """Maps the setup of a paper to a tensor of shape (4,), which can then be given to the network.
+    """Maps the setup of a paper to a tensor of shape (5,), which can then be given to the network.
     The following is given to the model:
-    - the fibre material, 0 for carbon and 1 for glass
-    - the fiber contribution. This depends on the "angle of attack" of the forces on the material.
+    - the fibre material as a one-hot vector, [1, 0] for carbon and [0, 1] for glass
+    - the fiber contribution. This depends on the ply angles relative to the load.
       E.g. 1 for 0°, 0.25 for ±45°, 0 for 90°
     - the volume to surface ratio in mm
     - the logarithm of the loading frequency in Hz. The heat dissipated per second grows with the frequency, so
       log delta_T_stab, which the network predicts, is expected to grow linearly with log f.
     """
-    angles = torch.tensor(setup["angles_of_attack_deg"], dtype=torch.float64).deg2rad()
-    return torch.tensor([FIBRE_MATERIALS[setup["fibre_material"]], float((angles.cos() ** 4).mean()),
+    angles = torch.tensor(setup["ply_angles_deg"], dtype=torch.float64).deg2rad()
+    return torch.tensor([*FIBRE_MATERIALS[setup["fibre_material"]], float((angles.cos() ** 4).mean()),
                          setup["volume_to_surface_mm"], float(torch.log(torch.tensor(setup["frequency_hz"])))],
                         dtype=torch.float64)
 
@@ -37,7 +37,7 @@ class ParameterizedExponential(torch.nn.Module):
     stress_mean: torch.Tensor
     stress_std: torch.Tensor
 
-    def __init__(self, train_curves: list[Curve], n_setup_features: int = 4, hidden_units: int = 16) -> None:
+    def __init__(self, train_curves: list[Curve], n_setup_features: int = 5, hidden_units: int = 16) -> None:
         super().__init__()
         # The stress level is standardized with the mean and standard deviation of the training curves. Its raw range of
         # about 0.3 to 0.9 barely changes the hidden units at their initial weights, so the network starts almost linear in it.
